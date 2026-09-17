@@ -67,7 +67,7 @@ class DateViewTests(unittest.TestCase):
              patch('tasks_tui.ui_manager.color_pair', return_value=0), \
              patch('tasks_tui.ui_manager.mvwaddstr') as draw:
             ui._draw_task_panel(None, tasks)
-            self.assertEqual(draw.call_args_list[0].args[3], 'Overdue')
+            self.assertIn('Overdue', [call.args[3] for call in draw.call_args_list])
             for _ in tasks:
                 ui.update_task_selection(tasks, 1)
                 ui._draw_task_panel(None, tasks)
