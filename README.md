@@ -58,6 +58,19 @@ To run the application, use the following command:
 tasks-tui
 ```
 
+By default, sync fetches up to 100 tasks per list to keep startup short.
+Choose a different limit for each run:
+
+```bash
+tasks-tui --max-tasks 50
+tasks-tui --max-tasks 500
+tasks-tui --max-tasks 0    # Fetch all tasks (slower)
+```
+
+The limit includes completed tasks and subtasks, before the visibility filter
+and date sorting. Tasks beyond the limit remain in Google Tasks but are not
+loaded for this run. All task lists are fetched regardless of this limit.
+
 ### Keyboard Shortcuts
 
 | Key          | Action                                  |
