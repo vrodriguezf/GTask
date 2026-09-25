@@ -20,6 +20,7 @@ class UIManager:
         self.selected_task_idx = 0
         self.task_scroll_offset = 0
         self.syncing = False
+        self.sync_progress = lambda: ''
         self.animation_thread = None
         self.show_help = False
         self.animation_frame = ""
@@ -287,8 +288,8 @@ class UIManager:
         i = 0
         h, w = getmaxyx(self.stdscr)
         while self.syncing:
-            animation_frame = f" {braille_patterns[i % len(braille_patterns)]} Syncing"
-            mvwaddstr(self.stdscr, h - 2, 1, animation_frame, A_NORMAL)
+            animation_frame = f" {braille_patterns[i % len(braille_patterns)]} Syncing {self.sync_progress()}"
+            mvwaddstr(self.stdscr, h - 2, 1, animation_frame[:max(0, w - 2)].ljust(max(0, w - 2)), A_NORMAL)
             refresh()
             time.sleep(0.1)
             i += 1

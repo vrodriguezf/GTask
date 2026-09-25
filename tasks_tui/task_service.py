@@ -7,12 +7,14 @@ class TaskService:
     """
     Manages connections and data flow for Google Tasks, with a local cache.
     """
-    def __init__(self):
+    def __init__(self, max_tasks=100):
+        self.max_tasks = max_tasks
         self.creds = get_credentials()
         self.service = build('tasks', 'v1', credentials=self.creds)
         self.data = local_storage.load_data()
         self.dirty = False
         self.initial_sync_completed = False
+        self.sync_progress = ''
 
         if not self.data or not self.data['task_lists']:
             self.sync_from_google()
@@ -24,16 +26,33 @@ class TaskService:
         """Gets the ID of the first task list from local data."""
         return self.data['task_lists'][0]['id'] if self.data['task_lists'] else None
 
+    def _list_all(self, resource, limit=0, **params):
+        """Collect result pages up to limit (zero means unlimited)."""
+        items = []
+        params.setdefault('maxResults', 100)
+        while True:
+            if limit:
+                params['maxResults'] = min(100, limit - len(items))
+            response = resource.list(**params).execute()
+            items.extend(response.get('items', []))
+            self.sync_progress = f'{len(items)} entries fetched'
+            if limit and len(items) >= limit:
+                return items[:limit]
+            page_token = response.get('nextPageToken')
+            if not page_token:
+                return items
+            params['pageToken'] = page_token
+
     def sync_from_google(self):
-        """Fetches all data from Google Tasks and updates the local cache."""
+        """Fetches task lists and tasks up to the configured per-list limit."""
         if self.initial_sync_completed:
             return
-        task_lists = self.service.tasklists().list().execute().get('items', [])
+        task_lists = self._list_all(self.service.tasklists())
         self.data['task_lists'] = task_lists
         self.data['tasks'] = {}
         for task_list in task_lists:
             list_id = task_list['id']
-            tasks = self.service.tasks().list(tasklist=list_id, showHidden=True).execute().get('items', [])
+            tasks = self._list_all(self.service.tasks(), limit=self.max_tasks, tasklist=list_id, showHidden=True)
             if tasks:
                 tasks.sort(key=lambda t: t.get('position', ''))
             self.data['tasks'][list_id] = tasks
@@ -322,7 +341,7 @@ class TaskService:
             return
 
         # Fetch all google lists for comparison
-        google_lists_map = {lst['id']: lst for lst in self.service.tasklists().list().execute().get('items', [])}
+        google_lists_map = {lst['id']: lst for lst in self._list_all(self.service.tasklists())}
 
         # Sync lists
         for i, task_list in enumerate(self.data['task_lists']):
@@ -361,8 +380,13 @@ class TaskService:
             if list_id.startswith('temp_list_'):
                 continue
 
-            google_tasks_list = self.service.tasks().list(tasklist=list_id, showHidden=True).execute().get('items', [])
+            google_tasks_list = self._list_all(self.service.tasks(), limit=self.max_tasks, tasklist=list_id, showHidden=True)
             google_tasks_map = {t['id']: t for t in google_tasks_list}
+            # A loaded task may have moved beyond the download limit remotely.
+            for task in local_tasks_list:
+                if not task['id'].startswith('temp_') and not task.get('deleted') and task['id'] not in google_tasks_map:
+                    google_tasks_map[task['id']] = self.service.tasks().get(
+                        tasklist=list_id, task=task['id']).execute()
 
             # Handle new tasks (with temporary IDs)
             new_tasks = [t for t in local_tasks_list if t['id'].startswith('temp_')]

@@ -7,6 +7,7 @@ from .task_service import TaskService
 from .ui_manager import UIManager
 from .task_dates import sort_tasks
 import sys
+import argparse
 from dateutil.parser import ParserError, isoparse
 import os
 import subprocess
@@ -289,11 +290,12 @@ def handle_input(stdscr, app_state, ui_manager):
 
     return True # Keep the loop running
 
-def main_loop(stdscr):
+def main_loop(stdscr, max_tasks=100):
     """The main application loop function required by curses.wrapper."""
     # 1. Initialization
-    task_service = TaskService()
+    task_service = TaskService(max_tasks=max_tasks)
     ui_manager = UIManager(stdscr)
+    ui_manager.sync_progress = lambda: task_service.sync_progress
     app_state = AppState(task_service)
 
     # Disable cursor visibility for a cleaner TUI
@@ -303,8 +305,10 @@ def main_loop(stdscr):
     keypad(stdscr, True)
 
     ui_manager.start_sync_animation()
-    app_state.service.sync_from_google()
-    ui_manager.stop_sync_animation()
+    try:
+        app_state.service.sync_from_google()
+    finally:
+        ui_manager.stop_sync_animation()
     app_state.refresh_data()
 
     running = True
@@ -340,9 +344,15 @@ def main_loop(stdscr):
         # 3. Handle User Input
         running = handle_input(stdscr, app_state, ui_manager)
 
-def cli():
+def cli(argv=None):
+    parser = argparse.ArgumentParser(description='Google Tasks terminal interface')
+    parser.add_argument('--max-tasks', type=int, default=100, metavar='N',
+                        help='maximum tasks fetched per list, including completed tasks and subtasks (default: 100; 0: all)')
+    args = parser.parse_args(argv)
+    if args.max_tasks < 0:
+        parser.error('--max-tasks must be zero or greater')
     try:
-        wrapper(main_loop)
+        wrapper(lambda stdscr: main_loop(stdscr, max_tasks=args.max_tasks))
     except Exception as e:
         # Print the error before exiting the terminal session
         print(f"An error occurred: {e}", file=sys.stderr)
