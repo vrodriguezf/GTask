@@ -3,6 +3,24 @@
 from datetime import date, timedelta
 
 from dateutil.parser import isoparse
+import calendar
+
+
+def serialize_due(value):
+    """Return a date-only API timestamp, or None to remove a scheduled date."""
+    if value is None or value == '':
+        return None
+    day = isoparse(value).date() if isinstance(value, str) else value
+    return f'{day.year:04d}-{day.month:02d}-{day.day:02d}T00:00:00Z'
+
+
+def shift_month(day, delta):
+    """Move by months, clamping the day for shorter months."""
+    month_index = (day.year - 1) * 12 + day.month - 1 + delta
+    month_index = max(0, min(9999 * 12 - 1, month_index))
+    year, month = divmod(month_index, 12)
+    year, month = year + 1, month + 1
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
 
 
 def due_date(task):

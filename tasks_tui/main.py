@@ -8,7 +8,6 @@ from .ui_manager import UIManager
 from .task_dates import sort_tasks
 import sys
 import argparse
-from dateutil.parser import ParserError, isoparse
 import os
 import subprocess
 import tempfile
@@ -41,13 +40,6 @@ def open_editor_for_task_notes(stdscr, app_state, ui_manager):
     if new_note != initial_content:
         app_state.service.change_detail_task(app_state.active_list_id, selected_task['id'], new_note)
         app_state.refresh_data()
-
-def is_valid_date(date_str):
-    try:
-        isoparse(date_str)
-        return True
-    except (ParserError, ValueError):
-        return False
 
 # Global State Management (simplified for TUI)
 class AppState:
@@ -187,33 +179,24 @@ def handle_input(stdscr, app_state, ui_manager):
         ui_manager.stop_sync_animation()
         app_state.refresh_data()
 
-    elif key == ord('r'):
+    elif key == ord('e'):
         if ui_manager.active_panel == 'tasks' and app_state.tasks:
-            new_title = ui_manager.get_user_input("New Task Title: ")
             selected_task = app_state.tasks[ui_manager.selected_task_idx]
-            app_state.service.rename_task(app_state.active_list_id, selected_task["id"], new_title)
-            app_state.refresh_data() # Refresh display after change
+            draft = ui_manager.task_form(selected_task)
+            if draft is not None:
+                app_state.service.edit_task(
+                    app_state.active_list_id, selected_task['id'],
+                    draft['title'], draft['due'])
+                app_state.refresh_data()
+                ui_manager.selected_task_idx = next(
+                    idx for idx, task in enumerate(app_state.tasks)
+                    if task['id'] == selected_task['id'])
         elif ui_manager.active_panel == 'lists' and app_state.task_lists:
             new_title = ui_manager.get_user_input("New List Title: ")
             if new_title:
                 selected_list = app_state.task_lists[ui_manager.selected_list_idx]
                 app_state.service.rename_list(selected_list['id'], new_title)
                 app_state.refresh_data()
-
-    elif key == ord('a'):
-        if ui_manager.active_panel == 'tasks' and app_state.tasks:
-            new_date = ui_manager.get_user_input("Due Date: ")
-            if is_valid_date(new_date):
-                selected_task = app_state.tasks[ui_manager.selected_task_idx]
-                app_state.service.change_date_task(app_state.active_list_id, selected_task['id'], new_date)
-                app_state.refresh_data()
-                ui_manager.selected_task_idx = next(
-                    idx for idx, task in enumerate(app_state.tasks)
-                    if task['id'] == selected_task['id']
-                )
-            else:
-                ui_manager.show_temporary_message(f"Invalid date format: '{new_date}'")
-
 
     elif key == ord('i'):
         if ui_manager.active_panel == 'tasks' and app_state.tasks:
@@ -268,15 +251,19 @@ def handle_input(stdscr, app_state, ui_manager):
             app_state.refresh_data()
 
     # Add New Task
-    elif key == ord('o'):
+    elif key == ord('a'):
         if ui_manager.active_panel == 'tasks':
-            new_title = ui_manager.get_user_input("New Task Title: ")
-            if new_title:
-                if app_state.current_parent_task_id:
-                    app_state.service.add_task(app_state.active_list_id, new_title, parent=app_state.current_parent_task_id)
-                else:
-                    app_state.service.add_task(app_state.active_list_id, new_title)
-                app_state.refresh_data() # Fetch and display the new task
+            if not app_state.active_list_id:
+                ui_manager.show_temporary_message('Create a list first.')
+                return True
+            draft = ui_manager.task_form()
+            if draft is not None:
+                task = app_state.service.add_task(
+                    app_state.active_list_id, draft['title'],
+                    parent=app_state.current_parent_task_id, due=draft['due'])
+                app_state.refresh_data()
+                ui_manager.selected_task_idx = next(
+                    idx for idx, item in enumerate(app_state.tasks) if item['id'] == task['id'])
         else:
             new_title = ui_manager.get_user_input("New List Title: ")
             if new_title:

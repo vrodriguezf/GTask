@@ -81,15 +81,39 @@ loaded for this run. All task lists are fetched regardless of this limit.
 | `↓` / `j`    | Move selection down                     |
 | `←` / `h`    | Exit selection                          |
 | `→` / `l`    | Enter selection                         |
-| `o`          | Open new selection                      |
+| `a`          | Add task/list                           |
 | `d`          | Delete selection                        |
-| `r`          | Rename selection                        |
+| `e`          | Edit title and date (or list name)                        |
 | `c`          | Toggle task completion                  |
 | `v`          | Show/hide completed tasks               |
-| `a`          | Add due date            |
 | `i`          | Insert/view task note   |
 | `p`          | Paste from buffer       |
 | `?`          | Toggle Help                             |
+
+### Creating and scheduling tasks
+
+In the task panel, press `a`, type a title, and press Enter to create a task
+with **No date**. To schedule it before creating it, press Tab to reach
+**No date**, **Today**, **Tomorrow**, or **Choose date**, then Enter to select.
+Choose **Create task** to save. Escape cancels the draft.
+
+Press `e` on an existing task to edit its title and date in the same form.
+The current values are filled in; choose **Save changes** or press Enter in
+the title to save both. Escape discards all edits. In the date picker:
+
+- `t`: today; `m`: tomorrow; `n`: no date.
+- Choose **Choose date** or press Tab to enter the calendar.
+- Arrow keys (or `h/j/k/l`) move by day/week.
+- Page Up/Page Down (or `[` / `]`) change months.
+- Enter selects; Escape cancels without changing the task or its draft title.
+
+Dates are optional for both tasks and subtasks. New tasks remain selected,
+including when they appear in the **No date** section.
+
+Times and repeat rules must be set in the official Google Tasks app.
+The [public Tasks API](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks)
+only stores the date and exposes no recurrence field, so GTask cannot sync
+those settings.
 
 ### Task Status Symbols
 

@@ -5,10 +5,13 @@
 
 from unicurses import *
 from .task_dates import date_section, due_date
+from .task_dialogs import task_form, pick_date
 import time
 import threading
 
 class UIManager:
+    task_form = task_form
+    pick_date = pick_date
     """
     Manages the curses screen layout and drawing.
     """
@@ -85,12 +88,11 @@ class UIManager:
             ("h/j/k/l", "Select List/Task/Subtask"),
             ("c", "Complete Toggle"),
             ("v", "Show/Hide Completed Tasks"),
-            ("r", "Rename Task/List"),
-            ("a", "Add Due Date"),
+            ("e", "Edit Task/List"),
             ("i", "Insert Note"),
             ("d", "Delete Task/List"),
             ("p", "Paste Task/List"),
-            ("o", "Open Task"),
+            ("a", "Add Task/List"),
             ("?", "Help Toggle"),
         ]
 
@@ -134,7 +136,7 @@ class UIManager:
         title = f"Tasks in {parent_task['title']}" if parent_task else "Tasks"
         self._draw_border(win, title)
         max_y, max_x = getmaxyx(win)
-        visibility_hint = f"[v] Completed: {'shown' if show_completed else 'hidden'}"
+        visibility_hint = f"[a] Add [e] Edit [v] Completed: {'shown' if show_completed else 'hidden'}"
         mvwaddstr(win, max_y - 1, 2, visibility_hint[:max(0, max_x - 4)], A_DIM)
 
         if parent_ids is None:
@@ -148,6 +150,8 @@ class UIManager:
             attr = color_pair(5) if self.active_panel == 'tasks' else A_DIM
             message = "No tasks in this list." if show_completed else "No incomplete tasks. Press v to show completed."
             mvwaddstr(win, 1, 2, message[:max(0, max_x - 4)], attr)
+            if max_y > 3:
+                mvwaddstr(win, 2, 2, 'Press a to create a task (date optional).'[:max(0, max_x - 4)], A_DIM)
             return
 
         # Headings are display rows, never selectable tasks.

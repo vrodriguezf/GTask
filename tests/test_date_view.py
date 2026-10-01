@@ -45,8 +45,8 @@ class DateViewTests(unittest.TestCase):
         ui.active_panel = 'tasks'
         ui.selected_task_idx = 1
         self.assertEqual([t['id'] for t in state.tasks], ['dated', 'undated'])
-        with patch('tasks_tui.main.getch', return_value=ord('a')), patch.object(
-                ui, 'get_user_input', return_value='2026-09-01'):
+        with patch('tasks_tui.main.getch', return_value=ord('e')), patch.object(
+                ui, 'task_form', return_value={'title': 'undated', 'due': '2026-09-01'}):
             handle_input(None, state, ui)
         self.assertEqual(state.tasks[ui.selected_task_idx]['id'], 'undated')
         self.assertEqual(ui.selected_task_idx, 0)
