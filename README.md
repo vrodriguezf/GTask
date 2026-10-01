@@ -10,6 +10,8 @@ A simple, fast, and intuitive Terminal User Interface (TUI) for Google Tasks.
 *   Hide completed tasks by default; press `v` to show or hide them for the current session.
 *   Rename tasks and lists.
 *   Switch between your task lists.
+*   Automatically upload task and list changes as soon as you save them.
+*   Sync with Google Tasks at any time with `w` or `r`.
 *   Add due dates, notes, or subtasks
 *   Tasks grouped by date: Overdue, Today, Tomorrow, upcoming dates, then No date.
 *   Scroll through date sections with the arrow keys or j/k; headings are not selectable.
@@ -71,12 +73,27 @@ The limit includes completed tasks and subtasks, before the visibility filter
 and date sorting. Tasks beyond the limit remain in Google Tasks but are not
 loaded for this run. All task lists are fetched regardless of this limit.
 
+Local changes upload automatically after you add, edit, complete, delete, or
+paste a task or list, including date and note edits. Saving a form uploads it;
+cancelling a form does not. Your selected list, task, and completed-task
+visibility are preserved when possible.
+
+Cloud changes are fetched at startup and whenever you press `w` or `r`.
+These shortcuts also retry pending uploads before fetching. A failed upload
+keeps your edits pending in the running app and is retried on the next local
+change, manual sync, or quit.
+
+Only fields edited locally are uploaded, so unrelated cloud edits are kept.
+If the same field was edited both locally and remotely, the local edit wins.
+A failed sync shows an error and leaves the app open so you can retry with `r`.
+Downloads replace the cache only after every list has been fetched successfully.
+
 ### Keyboard Shortcuts
 
 | Key          | Action                                  |
 | :----------- | :-------------------------------------- |
 | `q`          | Quit application                        |
-| `w`          | Write and Sync                          |
+| `w` / `r`    | Upload edits and refresh from Google Tasks |
 | `↑` / `k`    | Move selection up                       |
 | `↓` / `j`    | Move selection down                     |
 | `←` / `h`    | Exit selection                          |

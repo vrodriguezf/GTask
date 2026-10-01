@@ -62,6 +62,7 @@ class AppState:
 
     def calculate_task_counts(self):
         """Calculates the number of tasks in each list."""
+        self.task_counts.clear()
         for task_list in self.task_lists:
             list_id = task_list['id']
             self.task_counts[list_id] = len(self.visible_tasks(self.service.get_tasks_for_list(list_id)))
@@ -97,6 +98,60 @@ class AppState:
             return True
         return False
 
+def synchronize(app_state, ui_manager, upload_only=False):
+    """Sync without losing the current view or exiting on network errors."""
+    selected_task = (app_state.tasks[ui_manager.selected_task_idx]
+                     if 0 <= ui_manager.selected_task_idx < len(app_state.tasks) else {})
+    selected_list = (app_state.task_lists[ui_manager.selected_list_idx]
+                     if 0 <= ui_manager.selected_list_idx < len(app_state.task_lists) else {})
+    active_list_id = app_state.active_list_id
+    parent_id = app_state.current_parent_task_id
+    error = None
+    ui_manager.start_sync_animation()
+    try:
+        if upload_only:
+            app_state.service.sync_to_google()
+        else:
+            app_state.service.sync()
+    except Exception as exc:
+        error = exc
+    finally:
+        ui_manager.stop_sync_animation()
+
+    # Uploads replace temporary IDs, including the parent of an open subtask view.
+    id_map = getattr(app_state.service, 'last_sync_id_map', {})
+    app_state.active_list_id = app_state.service.active_list_id
+    app_state.current_parent_task_id = id_map.get(parent_id, parent_id)
+    app_state.parent_task_id_stack = [id_map.get(item, item) for item in app_state.parent_task_id_stack]
+    if app_state.active_list_id != id_map.get(active_list_id, active_list_id):
+        app_state.current_parent_task_id = None
+        app_state.parent_task_id_stack.clear()
+        app_state.parent_task_idx_stack.clear()
+    while app_state.current_parent_task_id:
+        parent = app_state.service.get_task(app_state.active_list_id, app_state.current_parent_task_id)
+        if parent and not parent.get('deleted'):
+            break
+        app_state.current_parent_task_id = (app_state.parent_task_id_stack.pop()
+                                            if app_state.parent_task_id_stack else None)
+        if app_state.parent_task_idx_stack:
+            app_state.parent_task_idx_stack.pop()
+
+    app_state.refresh_data()
+    ui_manager.selected_list_idx = next(
+        (idx for idx, item in enumerate(app_state.task_lists) if item['id'] == selected_list.get('id')),
+        min(ui_manager.selected_list_idx, max(0, len(app_state.task_lists) - 1)),
+    )
+    ui_manager.selected_task_idx = next(
+        (idx for idx, item in enumerate(app_state.tasks) if item['id'] == selected_task.get('id')),
+        min(ui_manager.selected_task_idx, max(0, len(app_state.tasks) - 1)),
+    )
+    if error is not None:
+        ui_manager.show_temporary_message(f'Sync failed: {error}. Press r to retry.')
+        return False
+    if not upload_only:
+        ui_manager.show_temporary_message('Synced with Google Tasks.')
+    return True
+
 def handle_input(stdscr, app_state, ui_manager):
     """
     Main input handler. Maps key presses to application actions.
@@ -109,9 +164,8 @@ def handle_input(stdscr, app_state, ui_manager):
     # Quitting
     if key in [ord('q'), ord('Q')]:
         if app_state.service.dirty:
-            ui_manager.start_sync_animation()
-            app_state.service.sync_to_google()
-            ui_manager.stop_sync_animation()
+            if not synchronize(app_state, ui_manager, upload_only=True):
+                return True
         return False
 
     if key == KEY_RESIZE:
@@ -138,7 +192,7 @@ def handle_input(stdscr, app_state, ui_manager):
         elif ui_manager.active_panel == 'tasks':
             ui_manager.toggle_panel()
     elif key == KEY_RIGHT or key == ord('l'):
-        if ui_manager.active_panel == 'lists':
+        if ui_manager.active_panel == 'lists' and app_state.task_lists:
             selected_list = app_state.task_lists[ui_manager.selected_list_idx]
             if app_state.active_list_id != selected_list['id']:
                 app_state.change_active_list(selected_list["id"])
@@ -173,11 +227,8 @@ def handle_input(stdscr, app_state, ui_manager):
             app_state.refresh_data() # Refresh display after change
             ui_manager.selected_task_idx = min(ui_manager.selected_task_idx, max(0, len(app_state.tasks) - 1))
 
-    elif key == ord('w'):
-        ui_manager.start_sync_animation()
-        app_state.service.sync_to_google()
-        ui_manager.stop_sync_animation()
-        app_state.refresh_data()
+    elif key in (ord('w'), ord('r')):
+        synchronize(app_state, ui_manager)
 
     elif key == ord('e'):
         if ui_manager.active_panel == 'tasks' and app_state.tasks:
@@ -291,12 +342,8 @@ def main_loop(stdscr, max_tasks=100):
     cbreak()
     keypad(stdscr, True)
 
-    ui_manager.start_sync_animation()
-    try:
-        app_state.service.sync_from_google()
-    finally:
-        ui_manager.stop_sync_animation()
-    app_state.refresh_data()
+    if not task_service.initial_sync_completed:
+        synchronize(app_state, ui_manager)
 
     running = True
     while running:
@@ -329,7 +376,12 @@ def main_loop(stdscr, max_tasks=100):
             ui_manager.show_temporary_message(f"Error: {e}")
 
         # 3. Handle User Input
+        revision = task_service.local_revision
         running = handle_input(stdscr, app_state, ui_manager)
+        # A saved form, toggle, deletion, paste, or note edit uploads immediately.
+        # Navigation and cancelled forms must not repeatedly retry a failed upload.
+        if running and task_service.dirty and task_service.local_revision != revision:
+            synchronize(app_state, ui_manager, upload_only=True)
 
 def cli(argv=None):
     parser = argparse.ArgumentParser(description='Google Tasks terminal interface')

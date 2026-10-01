@@ -1,4 +1,6 @@
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from copy import deepcopy
 from .auth import get_credentials
 from .task_dates import serialize_due
 from uuid import uuid4
@@ -13,13 +15,14 @@ class TaskService:
         self.creds = get_credentials()
         self.service = build('tasks', 'v1', credentials=self.creds)
         self.data = local_storage.load_data()
+        self._synced_data = deepcopy(self.data)
         self.dirty = False
+        self.local_revision = 0
         self.initial_sync_completed = False
         self.sync_progress = ''
 
         if not self.data or not self.data['task_lists']:
             self.sync_from_google()
-            self.initial_sync_completed = True
 
         self.active_list_id = self._get_default_task_list_id()
 
@@ -46,23 +49,39 @@ class TaskService:
 
     def sync_from_google(self):
         """Fetches task lists and tasks up to the configured per-list limit."""
-        if self.initial_sync_completed:
-            return
+        if self.dirty:
+            raise RuntimeError('Upload pending changes before refreshing.')
         task_lists = self._list_all(self.service.tasklists())
-        self.data['task_lists'] = task_lists
-        self.data['tasks'] = {}
+        downloaded = {'task_lists': task_lists, 'tasks': {}}
         for task_list in task_lists:
             list_id = task_list['id']
             tasks = self._list_all(self.service.tasks(), limit=self.max_tasks, tasklist=list_id, showHidden=True)
             if tasks:
                 tasks.sort(key=lambda t: t.get('position', ''))
-            self.data['tasks'][list_id] = tasks
+            downloaded['tasks'][list_id] = tasks
+        # Keep the previous cache intact if any request fails.
+        self.data = downloaded
+        if getattr(self, 'active_list_id', None) not in {lst['id'] for lst in task_lists}:
+            self.active_list_id = self._get_default_task_list_id()
         self.save_local_data()
+        self.initial_sync_completed = True
+
+    def sync(self):
+        """Upload pending edits, then fetch changes made on other devices."""
+        self.sync_progress = ''
+        self.sync_to_google()
+        self.sync_from_google()
 
     def save_local_data(self):
         """Saves the current in-memory data to the local storage."""
         local_storage.save_data(self.data)
+        self._synced_data = deepcopy(self.data)
         self.dirty = False
+
+    def _mark_dirty(self):
+        """Track local edits so the controller can upload after each action."""
+        self.dirty = True
+        self.local_revision = getattr(self, 'local_revision', 0) + 1
 
     def get_task_lists(self):
         """Fetches all available task lists from the local cache."""
@@ -101,7 +120,7 @@ class TaskService:
         if list_id not in self.data['tasks']:
             self.data['tasks'][list_id] = []
         self.data['tasks'][list_id].append(task)
-        self.dirty = True
+        self._mark_dirty()
         return task
 
     def add_task_body(self, list_id, task_body, index=None):
@@ -124,7 +143,7 @@ class TaskService:
             self.data['tasks'][list_id].insert(index, new_task)
         else:
             self.data['tasks'][list_id].append(new_task)
-        self.dirty = True
+        self._mark_dirty()
         return new_task
 
     def toggle_task_status(self, list_id, task_id):
@@ -140,7 +159,7 @@ class TaskService:
             if task['id'] == task_id:
                 new_status = 'completed' if task.get('status') == 'needsAction' else 'needsAction'
                 task['status'] = new_status
-                self.dirty = True
+                self._mark_dirty()
                 toggled_task = task
                 break
                 
@@ -165,7 +184,7 @@ class TaskService:
             for task in tasks:
                 if task['id'] == child_id:
                     task['status'] = 'completed'
-                    self.dirty = True
+                    self._mark_dirty()
                     self._cascade_complete(list_id, child_id)
                     break
 
@@ -179,7 +198,7 @@ class TaskService:
             for task in tasks:
                 if task['id'] == child_id:
                     task['status'] = 'needsAction'
-                    self.dirty = True
+                    self._mark_dirty()
                     self._cascade_uncomplete(list_id, child_id)
                     break
 
@@ -194,7 +213,7 @@ class TaskService:
         for i, task in enumerate(tasks):
             if task['id'] == task_id:
                 tasks[i]['deleted'] = True
-                self.dirty = True
+                self._mark_dirty()
                 task_found = True
                 break
         
@@ -225,7 +244,7 @@ class TaskService:
             task['title'] = title
             if scheduled is not None or 'due' in task:
                 task['due'] = scheduled
-            self.dirty = True
+            self._mark_dirty()
         return task
 
     def rename_task(self, list_id, task_id, new_name):
@@ -234,8 +253,9 @@ class TaskService:
             return None
         for task in self.data['tasks'].get(list_id, []):
             if task['id'] == task_id:
-                task['title'] = new_name
-                self.dirty = True
+                if task.get('title') != new_name:
+                    task['title'] = new_name
+                    self._mark_dirty()
                 return task
         return None
 
@@ -247,8 +267,9 @@ class TaskService:
             due_date_rfc3339 = serialize_due(date_str)
             for task in self.data['tasks'].get(list_id, []):
                 if task['id'] == task_id:
-                    task['due'] = due_date_rfc3339
-                    self.dirty = True
+                    if task.get('due') != due_date_rfc3339:
+                        task['due'] = due_date_rfc3339
+                        self._mark_dirty()
                     return task
             return None
         except (ValueError, TypeError, OverflowError):
@@ -260,8 +281,9 @@ class TaskService:
             return None
         for task in self.data['tasks'].get(list_id, []):
             if task['id'] == task_id:
-                task['notes'] = detail
-                self.dirty = True
+                if task.get('notes', '') != detail:
+                    task['notes'] = detail
+                    self._mark_dirty()
                 return task
         return None
 
@@ -320,7 +342,7 @@ class TaskService:
         list_body = {'title': list_name, 'id': temp_id}
         self.data['task_lists'].append(list_body)
         self.data['tasks'][temp_id] = []
-        self.dirty = True
+        self._mark_dirty()
         return list_body
 
     def delete_list(self, list_id):
@@ -329,7 +351,7 @@ class TaskService:
             if task_list['id'] == list_id:
                 # Mark as deleted for sync purposes
                 self.data['task_lists'][i]['deleted'] = True
-                self.dirty = True
+                self._mark_dirty()
                 return True
         return False
 
@@ -349,25 +371,38 @@ class TaskService:
             return None
 
         # Update title in local cache first
-        self.data['task_lists'][list_index]['title'] = new_title
-        self.dirty = True
+        if self.data['task_lists'][list_index].get('title') != new_title:
+            self.data['task_lists'][list_index]['title'] = new_title
+            self._mark_dirty()
         return True
 
     def sync_to_google(self):
+        self.last_sync_id_map = {}
         if not self.dirty:
             return
+
+        baseline = getattr(self, '_synced_data', {'task_lists': [], 'tasks': {}})
+        baseline_lists = {lst['id']: lst for lst in baseline['task_lists']}
+
+        def changed_fields(local, previous, fields):
+            return {field: local.get(field) for field in fields
+                    if local.get(field) != previous.get(field)}
+
+        def delete_remote(request):
+            try:
+                request.execute()
+            except HttpError as error:
+                if error.resp.status not in (404, 410):
+                    raise
 
         # Fetch all google lists for comparison
         google_lists_map = {lst['id']: lst for lst in self._list_all(self.service.tasklists())}
 
         # Sync lists
-        for i, task_list in enumerate(self.data['task_lists']):
+        for task_list in self.data['task_lists']:
             if task_list.get('deleted'):
                 if not task_list['id'].startswith('temp_'):
-                    try:
-                        self.service.tasklists().delete(tasklist=task_list['id']).execute()
-                    except Exception as e:
-                        pass  # Already deleted
+                    delete_remote(self.service.tasklists().delete(tasklist=task_list['id']))
             elif task_list['id'].startswith('temp_list_'):
                 # This is a new list, create it
                 new_list_body = {'title': task_list['title']}
@@ -375,7 +410,12 @@ class TaskService:
                 
                 # Update the local list with the new ID
                 old_id = task_list['id']
-                self.data['task_lists'][i] = new_list
+                task_list.clear()
+                task_list.update(new_list)
+                self.last_sync_id_map[old_id] = new_list['id']
+                google_lists_map[new_list['id']] = new_list
+                if getattr(self, 'active_list_id', None) == old_id:
+                    self.active_list_id = new_list['id']
 
                 # Update the tasks with the new list ID
                 if old_id in self.data['tasks']:
@@ -384,8 +424,11 @@ class TaskService:
             else:
                 # Check for renames
                 google_list = google_lists_map.get(task_list['id'])
-                if google_list and task_list.get('title') != google_list.get('title'):
+                previous = baseline_lists.get(task_list['id'], google_list or task_list)
+                if google_list and changed_fields(task_list, previous, ('title',)):
                     self.service.tasklists().patch(tasklist=task_list['id'], body={'title': task_list.get('title')}).execute()
+                elif not google_list and changed_fields(task_list, previous, ('title',)):
+                    raise RuntimeError('An edited list was deleted in Google Tasks; local edits are still pending.')
 
         # Remove deleted lists from local cache
         self.data['task_lists'] = [lst for lst in self.data['task_lists'] if not lst.get('deleted')]
@@ -397,17 +440,28 @@ class TaskService:
             if list_id.startswith('temp_list_'):
                 continue
 
+            fields = ('title', 'notes', 'due', 'status')
+            baseline_tasks = {task['id']: task for task in baseline['tasks'].get(list_id, [])}
+            pending = [task for task in local_tasks_list
+                       if task['id'].startswith('temp_') or task.get('deleted')
+                       or task['id'] not in baseline_tasks
+                       or changed_fields(task, baseline_tasks[task['id']], fields)]
+            if not pending:
+                continue
+            if list_id not in google_lists_map:
+                raise RuntimeError('A list with pending edits was deleted in Google Tasks; local edits are still pending.')
+
             google_tasks_list = self._list_all(self.service.tasks(), limit=self.max_tasks, tasklist=list_id, showHidden=True)
             google_tasks_map = {t['id']: t for t in google_tasks_list}
             # A loaded task may have moved beyond the download limit remotely.
-            for task in local_tasks_list:
+            for task in pending:
                 if not task['id'].startswith('temp_') and not task.get('deleted') and task['id'] not in google_tasks_map:
                     google_tasks_map[task['id']] = self.service.tasks().get(
                         tasklist=list_id, task=task['id']).execute()
 
             # Handle new tasks (with temporary IDs)
-            new_tasks = [t for t in local_tasks_list if t['id'].startswith('temp_')]
-            id_map = {} # For mapping temp IDs to new Google IDs
+            new_tasks = [t for t in local_tasks_list if t['id'].startswith('temp_') and not t.get('deleted')]
+            id_map = self.last_sync_id_map
 
             unprocessed_new_tasks = list(new_tasks)
             while unprocessed_new_tasks:
@@ -435,6 +489,11 @@ class TaskService:
                         new_task = self.service.tasks().insert(tasklist=list_id, body=new_task_body, parent=new_parent_id).execute()
                         id_map[old_id] = new_task['id']
                         task['id'] = new_task['id'] # Update the local task with the new ID
+                        if new_parent_id:
+                            task['parent'] = new_parent_id
+                        for child in local_tasks_list:
+                            if child.get('parent') == old_id:
+                                child['parent'] = new_task['id']
                         
                         processed_in_this_pass += 1
                     else:
@@ -449,53 +508,31 @@ class TaskService:
                         if 'status' in task: new_task_body['status'] = task['status']
                         
                         new_task = self.service.tasks().insert(tasklist=list_id, body=new_task_body).execute()
+                        id_map[task['id']] = new_task['id']
                         task['id'] = new_task['id']
+                        task.pop('parent', None)
                     break
                     
                 unprocessed_new_tasks = remaining_tasks
 
-            # Handle updated tasks
-            def update_children(parent_id):
-                for task in local_tasks_list:
-                    if task.get('parent') == parent_id:
-                        if not task['id'].startswith('temp_') and task['id'] in google_tasks_map:
-                            google_task = google_tasks_map[task['id']]
-                            
-                            update_body = {}
-                            if task.get('title') != google_task.get('title'): update_body['title'] = task.get('title')
-                            if task.get('notes') != google_task.get('notes'): update_body['notes'] = task.get('notes')
-                            if task.get('due') != google_task.get('due'): update_body['due'] = task.get('due')
-                            if task.get('status') != google_task.get('status'): update_body['status'] = task.get('status')
-                            
-                            if update_body:
-                                self.service.tasks().patch(tasklist=list_id, task=task['id'], body=update_body).execute()
-                        update_children(task['id'])
-
-            for task in local_tasks_list:
-                if not task.get('parent'):
-                    if not task['id'].startswith('temp_') and task['id'] in google_tasks_map:
-                        google_task = google_tasks_map[task['id']]
-                        
-                        update_body = {}
-                        if task.get('title') != google_task.get('title'): update_body['title'] = task.get('title')
-                        if task.get('notes') != google_task.get('notes'): update_body['notes'] = task.get('notes')
-                        if task.get('due') != google_task.get('due'): update_body['due'] = task.get('due')
-                        if task.get('status') != google_task.get('status'): update_body['status'] = task.get('status')
-                        
-                        if update_body:
-                            self.service.tasks().patch(tasklist=list_id, task=task['id'], body=update_body).execute()
-                    update_children(task['id'])
+            # Only upload fields edited locally since the last successful sync.
+            # Other fields may have changed on another device in the meantime.
+            for task in pending:
+                if not task.get('deleted') and task['id'] in google_tasks_map:
+                    previous = baseline_tasks.get(task['id'], google_tasks_map[task['id']])
+                    update_body = changed_fields(task, previous, fields)
+                    if update_body:
+                        self.service.tasks().patch(tasklist=list_id, task=task['id'], body=update_body).execute()
 
             # Handle deleted tasks
             deleted_tasks = [t for t in local_tasks_list if t.get('deleted')]
             for task in deleted_tasks:
                 if not task['id'].startswith('temp_'):
-                    try:
-                        self.service.tasks().delete(tasklist=list_id, task=task['id']).execute()
-                    except Exception as e:
-                        pass # Already deleted
+                    delete_remote(self.service.tasks().delete(tasklist=list_id, task=task['id']))
 
             # Remove deleted tasks from local cache
             self.data['tasks'][list_id] = [t for t in local_tasks_list if not t.get('deleted')]
 
+        if getattr(self, 'active_list_id', None) not in {lst['id'] for lst in self.get_task_lists()}:
+            self.active_list_id = self._get_default_task_list_id()
         self.save_local_data()

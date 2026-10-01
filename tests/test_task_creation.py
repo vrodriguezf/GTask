@@ -45,6 +45,7 @@ class TaskCreationTests(unittest.TestCase):
                     tasks.insert(0, {'id': parent, 'title': 'Parent'})
                 remote = copy.deepcopy(tasks)
                 self.service.data['tasks']['list'] = tasks
+                self.service._synced_data = copy.deepcopy(self.service.data)
                 self.service.change_date_task('list', 'task', '')
                 self.service.service = Mock()
                 api = self.service.service
