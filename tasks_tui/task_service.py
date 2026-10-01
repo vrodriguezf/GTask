@@ -1,6 +1,7 @@
 from googleapiclient.discovery import build
 from .auth import get_credentials
-from dateutil.parser import isoparse
+from .task_dates import serialize_due
+from uuid import uuid4
 from . import local_storage
 
 class TaskService:
@@ -85,14 +86,16 @@ class TaskService:
                 subtasks.append(task)
         return subtasks
 
-    def add_task(self, list_id, title, parent=None):
+    def add_task(self, list_id, title, parent=None, due=None):
         """Adds a new task to the specified list in the local cache."""
         if not list_id:
             return None
         # This is a temporary ID. Real ID will be assigned after sync.
-        import time
-        temp_id = f'temp_{int(time.time())}'
+        due = serialize_due(due)
+        temp_id = f'temp_{uuid4().hex}'
         task = {'title': title, 'id': temp_id, 'status': 'needsAction'}
+        if due:
+            task['due'] = due
         if parent:
             task['parent'] = parent
         if list_id not in self.data['tasks']:
@@ -111,8 +114,7 @@ class TaskService:
         new_task.pop('deleted', None)
 
         # This is a temporary ID. Real ID will be assigned after sync.
-        import time
-        temp_id = f'temp_{int(time.time())}'
+        temp_id = f'temp_{uuid4().hex}'
         new_task['id'] = temp_id
 
         if list_id not in self.data['tasks']:
@@ -210,6 +212,22 @@ class TaskService:
             
         return True
 
+    def edit_task(self, list_id, task_id, title, due):
+        """Save a title and optional date together, preserving other task fields."""
+        title = title.strip()
+        if not title:
+            return None
+        scheduled = serialize_due(due)
+        task = self.get_task(list_id, task_id)
+        if task is None:
+            return None
+        if task.get('title') != title or task.get('due') != scheduled:
+            task['title'] = title
+            if scheduled is not None or 'due' in task:
+                task['due'] = scheduled
+            self.dirty = True
+        return task
+
     def rename_task(self, list_id, task_id, new_name):
         """Renames a task in the local cache."""
         if not list_id:
@@ -226,15 +244,14 @@ class TaskService:
         if not list_id:
             return None
         try:
-            date_obj = isoparse(date_str)
-            due_date_rfc3339 = date_obj.isoformat() + 'Z'
+            due_date_rfc3339 = serialize_due(date_str)
             for task in self.data['tasks'].get(list_id, []):
                 if task['id'] == task_id:
                     task['due'] = due_date_rfc3339
                     self.dirty = True
                     return task
             return None
-        except (isoparse.ParserError, ValueError):
+        except (ValueError, TypeError, OverflowError):
             return None
 
     def change_detail_task(self, list_id, task_id, detail):
