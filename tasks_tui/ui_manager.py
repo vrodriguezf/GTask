@@ -84,7 +84,7 @@ class UIManager:
 
         controls = [
             ("q", "Quit and Sync"),
-            ("w", "Write and Sync"),
+            ("w / r", "Sync with Google Tasks"),
             ("h/j/k/l", "Select List/Task/Subtask"),
             ("c", "Complete Toggle"),
             ("v", "Show/Hide Completed Tasks"),
@@ -279,11 +279,12 @@ class UIManager:
 
     def show_temporary_message(self, message):
         h, w = getmaxyx(self.stdscr)
+        message = str(message).replace('\n', ' ')[:max(0, w - 2)]
         mvwaddstr(self.stdscr, h - 2, 1, message, A_REVERSE)
         refresh()
         time.sleep(1)
         # Clear the line
-        mvwaddstr(self.stdscr, h - 2, 1, " " * (len(message) + 1))
+        mvwaddstr(self.stdscr, h - 2, 1, " " * len(message))
         refresh()
 
     def _sync_animation(self):
